@@ -59,22 +59,28 @@ class Dialog:
     def get_user_node(self):
         def simulated_user_node(state):
             messages = [state["user_messages"][0]] + set_user_message(state)
-            # Call the simulated user
             response = self.user.invoke(messages)
-            # This response is an AI message - we need to flip this to be a human message
-            user_thoughts = state['user_thoughts']
+            
+            # Initialize user_thoughts
+            user_thoughts = state['user_thoughts'] if state['user_thoughts'] is not None else []
+
+            # Key: Separate "Add to State" and "Save to Database"
+            #If you have an idea, add it to the state
+            if response['thought'] is not None:
+                user_thoughts.append(response['thought'])
+            
+            #If memory is configured, save it to the database
             if self.memory is not None:
                 if response['thought'] is not None:
                     self.memory.insert_thought(state['thread_id'], response['thought'])
-                    user_thoughts.append(response['thought'])
                 self.memory.insert_dialog(state['thread_id'], 'Human', response['response'])
-
+            
             result_state = {'user_thoughts': user_thoughts, 'critique_feedback': '', 'stop_signal': ''}
             if '###STOP' in response['response']:
                 result_state['stop_signal'] = response['response']
             else:
                 result_state.update({"chatbot_messages": [HumanMessage(content=response['response'])],
-                                     'user_messages': [AIMessage(content=response['response'])]})
+                                    'user_messages': [AIMessage(content=response['response'])]})
             return result_state
 
         return simulated_user_node
