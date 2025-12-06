@@ -63,8 +63,6 @@ class Dialog:
             
             # Initialize user_thoughts
             user_thoughts = state['user_thoughts'] if state['user_thoughts'] is not None else []
-
-            # Key: Separate "Add to State" and "Save to Database"
             #If you have an idea, add it to the state
             if response['thought'] is not None:
                 user_thoughts.append(response['thought'])
