@@ -46,99 +46,99 @@ class Dialog:
         self.memory = memory
         self.compile_graph()
 
-    def get_end_condition(self):
-        def should_end(state: DialogState):
-            terminate = self.intermediate_processing(state)
-            if terminate == 'END':
-                return END
-            else:
-                return terminate
+    def user_end_condition(self, state: DialogState):
+        """Condition function for user node: goes to chatbot or end_critique"""
+        # After user node, check if we should go to chatbot or end_critique
+        if state['stop_signal'] != '':  # User sent ###STOP
+            return 'end_critique'  # Get critique
+        else:
+            return 'chatbot'  # Continue conversation
+    
+    def critique_end_condition(self, state: DialogState):
+        """Condition function for end_critique node: goes to user or END"""
+        # After end_critique node, check if we should go to user or END
+        if self.intermediate_processing(state) == 'END':
+            return END
+        else:
+            return 'user'
 
-        return should_end
 
-    def get_user_node(self):
-        def simulated_user_node(state):
-            messages = [state["user_messages"][0]] + set_user_message(state)
-            response = self.user.invoke(messages)
-            
-            # Initialize user_thoughts
-            user_thoughts = state['user_thoughts'] if state['user_thoughts'] is not None else []
-            #If you have an idea, add it to the state
+    def simulated_user_node(self, state):
+        messages = [state["user_messages"][0]] + set_user_message(state)
+        response = self.user.invoke(messages)
+        
+        # Initialize user_thoughts
+        user_thoughts = state['user_thoughts'] if state['user_thoughts'] is not None else []
+
+        # Key: Separate "Add to State" and "Save to Database"
+        #Step 1: If you have an idea, add it to the state (independent of memory)
+        if response['thought'] is not None:
+            user_thoughts.append(response['thought'])
+        
+        #Step 2: If memory is configured, save it to the database
+        if self.memory is not None:
             if response['thought'] is not None:
-                user_thoughts.append(response['thought'])
-            
-            #If memory is configured, save it to the database
-            if self.memory is not None:
-                if response['thought'] is not None:
-                    self.memory.insert_thought(state['thread_id'], response['thought'])
-                self.memory.insert_dialog(state['thread_id'], 'Human', response['response'])
-            
-            result_state = {'user_thoughts': user_thoughts, 'critique_feedback': '', 'stop_signal': ''}
-            if '###STOP' in response['response']:
-                result_state['stop_signal'] = response['response']
-            else:
-                result_state.update({"chatbot_messages": [HumanMessage(content=response['response'])],
-                                    'user_messages': [AIMessage(content=response['response'])]})
-            return result_state
+                self.memory.insert_thought(state['thread_id'], response['thought'])
+            self.memory.insert_dialog(state['thread_id'], 'Human', response['response'])
+        
+        result_state = {'user_thoughts': user_thoughts, 'critique_feedback': '', 'stop_signal': ''}
+        if '###STOP' in response['response']:
+            result_state['stop_signal'] = response['response']
+        else:
+            result_state.update({"chatbot_messages": [HumanMessage(content=response['response'])],
+                                'user_messages': [AIMessage(content=response['response'])]})
+        return result_state
 
-        return simulated_user_node
+    def critique_node(self, state):
+        # Call the simulated user
+        if 'Thought:' in state['user_thoughts'][-1]:
+            user_thought = state['user_thoughts'][-1].split('Thought:')[1]
+        else:
+            user_thought = state['user_thoughts'][-1]
+        conversation = convert_messages_to_str(state['chatbot_messages'], True)
+        if '###STOP FAILURE' in state['chatbot_messages'][-1].content:
+            judgement = f"The chatbot failed to adhere the policies\n Reason:{user_thought}"
+        else:
+            judgement = f"The chatbot adhered to the policies\n Reason:{user_thought}"
+        response = self.critique.invoke({'reason': judgement, 'conversation': conversation})
+        return {"critique_feedback": response.content}
 
-    def get_critique_node(self):
-        def critique_node(state):
-            # Call the simulated user
-            if 'Thought:' in state['user_thoughts'][-1]:
-                user_thought = state['user_thoughts'][-1].split('Thought:')[1]
-            else:
-                user_thought = state['user_thoughts'][-1]
-            conversation = convert_messages_to_str(state['chatbot_messages'], True)
-            if '###STOP FAILURE' in state['chatbot_messages'][-1].content:
-                judgement = f"The chatbot failed to adhere the policies\n Reason:{user_thought}"
-            else:
-                judgement = f"The chatbot adhered to the policies\n Reason:{user_thought}"
-            response = self.critique.invoke({'reason': judgement, 'conversation': conversation})
-            return {"critique_feedback": response.content}
-
-        return critique_node
-
-    def get_chatbot_node(self):
-        def chat_bot_node(state):
-            messages = state["chatbot_messages"]
-            # Call the chatbot
-            response = self.chatbot.invoke({'messages': messages, 'args': state['chatbot_args']})
-            last_human_message = max([i for i, v in enumerate(response['messages']) if v.type == 'human'])
-            all_tool_calls = {}
-            if self.memory is not None:
-                # Inserting tool calls into memory
-                for message in response['messages'][last_human_message + 1:]:
-                    if hasattr(message, 'tool_calls'):
-                        for tool_call in message.tool_calls:
-                            all_tool_calls[tool_call['id']] = tool_call
-                    if message.type == 'tool':
-                        all_tool_calls[message.tool_call_id]['output'] = message.content
-                for v in all_tool_calls.values():
-                    self.memory.insert_tool(state['thread_id'], v['name'], json.dumps(v['args']), v['output'])
-                    time.sleep(0.001)
-                # inserting the chatbot messages into memory
-                self.memory.insert_dialog(state['thread_id'], 'AI', response['messages'][-1].content)
-            return {"chatbot_messages": response['messages'][last_human_message+1:],
-                    'user_messages': [HumanMessage(content=response['messages'][-1].content)]}
-
-        return chat_bot_node
+    def chat_bot_node(self, state):
+        messages = state["chatbot_messages"]
+        # Call the chatbot
+        response = self.chatbot.invoke({'messages': messages, 'args': state['chatbot_args']})
+        last_human_message = max([i for i, v in enumerate(response['messages']) if v.type == 'human'])
+        all_tool_calls = {}
+        if self.memory is not None:
+            # Inserting tool calls into memory
+            for message in response['messages'][last_human_message + 1:]:
+                if hasattr(message, 'tool_calls'):
+                    for tool_call in message.tool_calls:
+                        all_tool_calls[tool_call['id']] = tool_call
+                if message.type == 'tool':
+                    all_tool_calls[message.tool_call_id]['output'] = message.content
+            for v in all_tool_calls.values():
+                self.memory.insert_tool(state['thread_id'], v['name'], json.dumps(v['args']), v['output'])
+                time.sleep(0.001)
+            # inserting the chatbot messages into memory
+            self.memory.insert_dialog(state['thread_id'], 'AI', response['messages'][-1].content)
+        return {"chatbot_messages": response['messages'][last_human_message+1:],
+                'user_messages': [HumanMessage(content=response['messages'][-1].content)]}
 
     def compile_graph(self):
         workflow = StateGraph(DialogState)
-        workflow.add_node("user", self.get_user_node())
-        workflow.add_node("chatbot", self.get_chatbot_node())
-        workflow.add_node("end_critique", self.get_critique_node())
+        workflow.add_node("user", self.simulated_user_node)
+        workflow.add_node("chatbot", self.chat_bot_node)
+        workflow.add_node("end_critique", self.critique_node)
         workflow.add_edge(START, "user")
         workflow.add_conditional_edges(
             "user",
-            self.get_end_condition(),
+            self.user_end_condition,
             ["chatbot", "end_critique"],
         )
         workflow.add_conditional_edges(
             "end_critique",
-            self.get_end_condition(),
+            self.critique_end_condition,
             ["user", END],
         )
         workflow.add_edge("chatbot", "user")
