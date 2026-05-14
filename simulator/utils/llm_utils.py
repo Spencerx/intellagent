@@ -303,5 +303,17 @@ def get_llm(config: dict, timeout=60):
             device=device,
             device_map=device_map
         )
+    elif config['type'].lower() == 'ollama':
+        from langchain_ollama import ChatOllama
+        # Ollama always starts a local HTTP server on port 11434 when installed.
+        # Override base_url here or set HOST in llm_env.yml only for remote Ollama servers.
+        return ChatOllama(
+            model=config['name'],
+            temperature=temperature,
+            base_url=config.get(
+                'base_url',
+                LLM_ENV.get('ollama', {}).get('HOST', 'http://localhost:11434'),
+            ),
+        )
     else:
         raise NotImplementedError("LLM not implemented")
