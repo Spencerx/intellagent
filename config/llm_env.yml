@@ -22,3 +22,6 @@ oracle:
   SERVICE_ENDPOINT: ''
   COMPARTMENT_ID: ''
 
+ollama:
+  HOST: 'http://localhost:11434'  # Change only if running Ollama on a remote machine
+
